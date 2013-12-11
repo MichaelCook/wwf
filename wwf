@@ -1,0 +1,463 @@
+#!/usr/bin/python2
+# -*- python -*-
+
+# This software is distributed under the "Simplified BSD license":
+#
+# Copyright Michael Cook <michael@waxrat.com>. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#    1. Redistributions of source code must retain the above copyright notice,
+#       this list of conditions and the following disclaimer.
+#
+#    2. Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY MICHAEL COOK ''AS IS'' AND ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+# EVENT SHALL MICHAEL COOK OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+# INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+# The views and conclusions contained in the software and documentation are
+# those of the authors and should not be interpreted as representing official
+# policies, either expressed or implied, of Michael Cook.
+
+"""
+Usage: %this [options] LETTERS
+
+Words With Friends.  Given a set tiles and a board, find words that could be
+played.  The board is read from stdin.  The possible plays are written to
+stdout.
+
+Arguments:
+  LETTERS     The set of tiles in your tray.
+
+Options:
+  -w --words FILE       List of allowed words.
+  --debug               Enable debug logging.
+  -d --debug-word WORD  Enable debug logging only for this word.
+  -h --help
+
+"""
+from docopt import docopt
+import sys, os, re, datetime
+this = os.path.basename(sys.argv[0]) # this script's name
+args = docopt(__doc__.replace("%this", this))
+
+debug = args["--debug"]
+debug_word = args["--debug-word"]
+if debug_word:
+    debug_word = debug_word.upper()
+
+word_list = args["--words"]
+if word_list is None:
+    # http://blogmybrain.com/words-with-friends-cheat/words.txt
+    word_list = "/home/mcook/site/words.txt"
+    #word_list = "/usr/share/dict/words"
+
+letter_value = { "A": 1, "B": 4, "C": 4, "D": 2, "E": 1, "F": 4, "G": 3,
+                 "H": 3, "I": 1, "J": 10, "K": 5, "L": 2, "M": 4, "N": 2,
+                 "O": 1, "P": 4, "Q": 10, "R": 1, "S": 1, "T": 1, "U": 2,
+                 "V": 5, "W": 4, "X": 8, "Y": 3, "Z": 10, "_": 0 }
+
+tray = args["LETTERS"].upper()
+
+if len(tray) == 7:
+    print "Tray:", tray
+else:
+    print "Tray: %s (%s letter%s)" % (tray, len(tray), "" if len(tray) == 1 else "s")
+
+empty_board = """
+|. . . tw. . tl. tl. . tw. . . |
+|. . dl. . dw. . . dw. . dl. . |
+|. dl. . dl. . . . . dl. . dl. |
+|tw. . tl. . . dw. . . tl. . tw|
+|. . dl. . . dl. dl. . . dl. . |
+|. dw. . . tl. . . tl. . . dw. |
+|tl. . . dl. . . . . dl. . . tl|
+|. . . dw. . . + . . . dw. . . |
+|tl. . . dl. . . . . dl. . . tl|
+|. dw. . . tl. . . tl. . . dw. |
+|. . dl. . . dl. dl. . . dl. . |
+|tw. . tl. . . dw. . . tl. . tw|
+|. dl. . dl. . . . . dl. . dl. |
+|. . dl. . dw. . . dw. . dl. . |
+|. . . tw. . tl. tl. . tw. . . |
+""".split("\n")
+empty_board.pop(0)              # remove blank line at beginning
+empty_board.pop()               # remove blank line at end
+if debug:
+    print "== empty =="
+    for row in empty_board:
+        print row
+
+letter_multiplier = [[1 for col in xrange(0, 15)] for row in xrange(0, 15)]
+word_multiplier = [[1 for col in xrange(0, 15)] for row in xrange(0, 15)]
+for row in xrange(0, 15):
+    for col in xrange(0, 15):
+        sq = empty_board[row][col * 2 + 1 : col * 2 + 3]
+        #print row, col, sq
+        if sq == "tw":
+            word_multiplier[row][col] = 3
+        elif sq == "dw":
+            word_multiplier[row][col] = 2
+        elif sq == "tl":
+            letter_multiplier[row][col] = 3
+        elif sq == "dl":
+            letter_multiplier[row][col] = 2
+if debug:
+    print "== word multiplier =="
+    for row in word_multiplier:
+        print row
+    print "== letter multiplier =="
+    for row in letter_multiplier:
+        print row
+
+# Read the input board.  The input format looks like this:
+#        |
+# ...k...........
+# ..piety........
+# ...d...........
+# r..dither......
+# a..i...........
+# zebec....v.....
+# e...o....i.....
+# ...exordia.g...-
+# ....a..i...h...
+# .jAil..e.faiths
+# .......t.o....p
+# ...crows.a.genu
+# ...w.....m....n
+# ..emoter.e.....
+# ...s...eddo....
+#
+# Upper case means it was a blank tile.
+#
+# Here's an empty board:
+#
+#         |
+#  ...+..+.+..+...
+#  ..+..+...+..+..
+#  .+..+.....+..+.
+#  +..+...+...+..+
+#  ..+...+.+...+..
+#  .+...+...+...+.
+#  +...+.....+...+
+# -...+...+...+...-
+#  +...+.....+...+
+#  .+...+...+...+.
+#  ..+...+.+...+..
+#  +..+...+...+..+
+#  .+..+.....+..+.
+#  ..+..+...+..+..
+#  ...+..+.+..+...
+#         |
+#
+# The +'s indicate dw/tw/dl/tl squares and the center.
+#
+# We update word_multiplier and letter_multiplier as we read the input board.
+# For any squares that already contain a tile, the multipliers will not apply
+# this time and so we reset them to 1.
+input_board = [[" " for col in xrange(0, 15)] for row in xrange(0, 15)]
+row = 0
+nonwhite_re = re.compile('.*\S')
+for line in sys.stdin:
+    line = line.strip().replace("-", "").replace("|", "").replace(" ", "")
+    if not nonwhite_re.match(line):
+        continue
+    if len(line) != 15:
+        raise Exception("Invalid input line: |" + line + "|")
+    for col in xrange(0, 15):
+        input_sq = line[col : col + 1]
+        if input_sq == "." or input_sq == "+":
+            input_board[row][col] = " "
+        elif input_sq >= "a" and input_sq <= "z":
+            input_board[row][col] = input_sq.upper()
+            word_multiplier[row][col] = 1
+            letter_multiplier[row][col] = 1
+        elif input_sq >= "A" and input_sq <= "Z":
+            # Upper case means it was a blank tile.  It has a specific letter,
+            # but the letter score is zero.
+            input_board[row][col] = input_sq
+            word_multiplier[row][col] = 1
+            letter_multiplier[row][col] = 0
+        else:
+            raise Exception("Invalid input square |" + input_sq + "|")
+    row += 1
+if row != 15:
+    raise Exception("Wrong number of input lines: " + str(row) + " != 15")
+if debug:
+    print "== input board =="
+    for row in input_board:
+        print row
+    print "== word multiplier =="
+    for row in word_multiplier:
+        print row
+    print "== letter multiplier =="
+    for row in letter_multiplier:
+        print row
+
+# Read the word list.  Skip words that contain punctuation or upper case
+# letters.
+good_word = re.compile('^[a-z]+$')
+words = dict()
+for word in open(word_list, "r"):
+    word = word.strip()
+    if good_word.match(word):
+        words[word.upper()] = True
+if debug: print "words", len(words), "from", word_list
+
+# Extract the largest word that is horizontal through ROW,COL.
+# Return WORD,LEFT,RIGHT.
+def adjacent_horizontal(row, col):
+    left = col
+    while left > 0 and input_board[row][left - 1] != " ":
+        left -= 1
+    right = col
+    while right < 14 and input_board[row][right + 1] != " ":
+        right += 1
+    if left == right:
+        return None
+    word = ""
+    col = left
+    while col <= right:
+        word += input_board[row][col]
+        col += 1
+    return word, left, right
+
+# Extract the largest word that is vertical through ROW,COL.
+# Return WORD,TOP,BOTTOM.
+def adjacent_vertical(row, col):
+    top = row
+    while top > 0 and input_board[top - 1][col] != " ":
+        top -= 1
+    bottom = row
+    while bottom < 14 and input_board[bottom + 1][col] != " ":
+        bottom += 1
+    if top == bottom:
+        return None
+    word = ""
+    row = top
+    while row <= bottom:
+        word += input_board[row][col]
+        row += 1
+    return word, top, bottom
+
+# Calculate the on-board score of the word WORD if it were to be played at
+# ROW,COL.  ROWINC,COLINC is either 0,1 for a horizontal placement, or 1,0 for
+# a vertical placement.  If we're considering playing any blanks this turn
+# then played_blank[r,c] will be True.  Returns the score with dl/tl/dw/tw
+# multipliers factored in.
+def sum_score(row, col, rowinc, colinc, word, played_blank):
+    #print "sum_score", row, col, rowinc, colinc, word, played_blank
+    sum = 0
+    wm = 1
+    for letter in word:
+        wm *= word_multiplier[row][col]
+        if (row, col) not in played_blank:
+            sum += letter_value[letter] * letter_multiplier[row][col]
+        row += rowinc
+        col += colinc
+    #print "sum_score", sum, wm, sum * wm
+    return sum * wm
+
+# True if any of the letters in row ROW from columns LEFT to RIGHT (inclusive)
+# are in the undo list UNDO meaning they were tiles played from our tray.
+def in_undo_list_horizontal(undo, row, left, right):
+    for r, c, l in undo:
+        if r == row and c >= left and c <= right:
+            return True
+    return False
+
+# True if any of the letters in column COL from rows TOP to BOTTOM (inclusive)
+# are in the undo list UNDO meaning they were tiles played from our tray.
+def in_undo_list_vertical(undo, col, top, bottom):
+    for r, c, l in undo:
+        if c == col and r >= top and r <= bottom:
+            return True
+    return False
+
+plays = list()
+
+# See if WORD fits at ROW, COL.  ACROSS is true for a horizontal fit or false
+# for a vertical fit.
+#
+# Basically, the rules are:
+#
+# 1. for each square, either the square is empty or it's the same as the
+#    letter we're trying to play
+#
+# 2. at least one square is empty
+#
+# 3. there has to be at least one adjacent non-empty tile or we use the center
+#    square
+#
+# 4. all adjacent words must be valid
+#
+# 5. each letter we would play must be in our tray, and we must not use any
+#    letter from our tray more than once
+#
+# Blanks complicate things somewhat.
+#
+# If we find a valid fit, calculate the score (taking into account dl/tl/dw/tw
+# multipliers, adjacent words, etc.) and add a line to the global PLAYS
+# describing the fit.
+#
+# On return, input_board is the same.
+def fit(word, row, col, across):
+    if debug: print "fit", word, row, col, "across" if across else "down"
+
+    undo = list()
+    try:
+        would_play = ""         # Letters we would play from our tray.
+        score = 0
+        remaining_letters = tray
+        adjacent = False
+        r = row
+        c = col
+        word_mult = 1
+        played_blank = dict()
+        for letter in word:
+            if letter == input_board[r][c]:
+                # The letter we need is already on the board in this square.
+                adjacent = True
+                score += letter_value[letter] * letter_multiplier[r][c]
+            elif input_board[r][c] == ' ':
+                new_rem = remaining_letters.replace(letter, "", 1)
+                if new_rem == remaining_letters:
+                    # Letter wasn't in our tray. Do we have a blank?
+                    new_rem = remaining_letters.replace("_", "", 1)
+                    if new_rem == remaining_letters:
+                        # No blank.
+                        return
+                    # Zero score for a blank.
+                    played_blank[r, c] = True
+                else:
+                    score += letter_value[letter] * letter_multiplier[r][c]
+                would_play += letter
+                remaining_letters = new_rem
+                undo.append((r, c, input_board[r][c]))
+                input_board[r][c] = letter
+                word_mult *= word_multiplier[r][c]
+            else:
+                # Square already has a different tile.
+                return
+            if across:
+                c += 1
+            else:
+                r += 1
+        if len(would_play) == 0:
+            return
+
+        # The full word is the same as the new word except that it might also
+        # have adjacent letters at the beginning or end.  Validate the full
+        # word.
+        if across:
+            full_word, left, right = adjacent_horizontal(row, col)
+            if full_word not in words:
+                if debug: print "adjh", "|" + full_word + "|", row, col, "(invalid)"
+                return
+            if debug: print "adjh", "|" + full_word + "|", row, col
+        else:
+            full_word, top, bottom = adjacent_vertical(row, col)
+            if full_word not in words:
+                if debug: print "adjh", "|" + full_word + "|", row, col, "(invalid)"
+                return
+            if debug: print "adjh", "|" + full_word + "|", row, col
+
+        # Check all adjacent words.
+        r = row
+        c = col
+        using_center = False
+        more_score = 0
+        for letter in word:
+            if r == 7 and c == 7:
+                using_center = True
+            if across:
+                adj = adjacent_vertical(r, c)
+                if adj:
+                    other_word, top, bottom = adj
+                    if other_word not in words:
+                        if debug: print "adjv", "|" + other_word + "|", r, c, "(invalid)"
+                        return
+                    if debug: print "adjv", "|" + other_word + "|", r, c
+                    adjacent = True
+                    if in_undo_list_vertical(undo, c, top, bottom):
+                        # We played at least one new tile in this vertical word.
+                        ms = sum_score(top, c, 1, 0, other_word, played_blank)
+                        if debug: print "more", ms
+                        more_score += ms
+                    else:
+                        if debug: print "not in undo list vertical"
+                c += 1
+            else:
+                adj = adjacent_horizontal(r, c)
+                if adj:
+                    other_word, left, right = adj
+                    if other_word not in words:
+                        if debug: print "adjh", "|" + other_word + "|", r, c, "(invalid)"
+                        return
+                    if debug: print "adjh", "|" + other_word + "|", r, c
+                    adjacent = True
+                    if in_undo_list_horizontal(undo, r, left, right):
+                        # We played at least one new tile in this horizontal word.
+                        m = sum_score(r, left, 0, 1, other_word, played_blank)
+                        if debug: print "more", m
+                        more_score += m
+                    else:
+                        if debug: print "not in undo list horizontal"
+                r += 1
+    finally:
+        while undo:
+            r, c, letter = undo.pop()
+            input_board[r][c] = letter
+
+    if not using_center and not adjacent:
+        return
+
+    score *= word_mult
+    if debug: print "more_score", more_score
+    score += more_score
+    if len(tray) == 7 and len(remaining_letters) == 0:
+        score += 35
+
+    # Add a string to the global list PLAYS describing this possible play.
+    # The string is formatted so that we can easily sort by score.
+    s = "%5d %s %d %d %s" % \
+        (score, word, row, col,
+         "across" if across else "down")
+    if word != full_word:
+        s += " as " + full_word
+    plays.append(s)
+    if debug: print "play", s.strip()
+
+# Try every word in the word list on every horizontal and vertical position on
+# the board.  Some placements will not be valid (e.g., there's already another
+# word there); fit() will ignore those.  When done, we have the unordered
+# global list PLAYS describing the possible plays.
+start = datetime.datetime.now()
+for word in words:
+    if debug_word:
+        debug = word == debug_word
+    if debug: print "try", word
+    for i in xrange(0, 15):
+        for j in xrange(0, 16 - len(word)):
+            fit(word, i, j, True)
+            fit(word, j, i, False)
+end = datetime.datetime.now()
+
+# Show the possible plays reverse-sorted by score.
+print len(plays), \
+    "play" if len(plays) == 1 else "plays", \
+    "of", len(words), \
+    "in", end - start
+for play in sorted(plays, reverse=True):
+    print play
