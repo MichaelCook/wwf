@@ -68,6 +68,11 @@ letter_value = { "A": 1, "B": 4, "C": 4, "D": 2, "E": 1, "F": 4, "G": 3,
                  "O": 1, "P": 4, "Q": 10, "R": 1, "S": 1, "T": 1, "U": 2,
                  "V": 5, "W": 4, "X": 8, "Y": 3, "Z": 10, "_": 0 }
 
+letter_count = { "A": 9, "B": 2, "C": 2, "D": 5, "E": 13, "F": 2, "G": 3,
+                 "H": 4, "I": 8, "J": 1, "K": 1, "L": 4, "M": 2, "N": 5,
+                 "O": 8, "P": 2, "Q": 1, "R": 6, "S": 5, "T": 7, "U": 4,
+                 "V": 2, "W": 2, "X": 1, "Y": 2, "Z": 1, "_": 2 }
+
 tray = args["LETTERS"].upper()
 
 if len(tray) == 7:
@@ -170,7 +175,7 @@ input_board = [[" " for col in xrange(0, 15)] for row in xrange(0, 15)]
 row = 0
 nonwhite_re = re.compile('.*\S')
 for line in sys.stdin:
-    line = line.strip().replace("-", "").replace("|", "").replace(" ", "")
+    line = line.strip("\r\n -|")
     if not nonwhite_re.match(line):
         continue
     if len(line) != 15:
@@ -180,15 +185,18 @@ for line in sys.stdin:
         if input_sq == "." or input_sq == "+":
             input_board[row][col] = " "
         elif input_sq >= "a" and input_sq <= "z":
-            input_board[row][col] = input_sq.upper()
+            input_sq = input_sq.upper()
+            input_board[row][col] = input_sq
             word_multiplier[row][col] = 1
             letter_multiplier[row][col] = 1
+            letter_count[input_sq] -= 1
         elif input_sq >= "A" and input_sq <= "Z":
             # Upper case means it was a blank tile.  It has a specific letter,
             # but the letter score is zero.
             input_board[row][col] = input_sq
             word_multiplier[row][col] = 1
             letter_multiplier[row][col] = 0
+            letter_count["_"] -= 1
         else:
             raise Exception("Invalid input square |" + input_sq + "|")
     row += 1
@@ -205,6 +213,32 @@ if debug:
     for row in letter_multiplier:
         print row
 
+# -----------------------------------------------------------------------------
+# Show remaining letters.
+# unseen is the total number of tiles unseen by me (either on the opponent's
+# tray or not yet drawn).
+for letter in tray:
+    letter_count[letter] -= 1
+unseen = 0
+rem = list()
+for letter, count in letter_count.items():
+    if count < 0:
+        print "Too many", letter + "'s on the board"
+        continue
+    if count == 1:
+        rem.append(letter)
+    elif count != 0:
+        rem.append(letter + str(count))
+    unseen += count
+# The opponent can't have more than 7 tiles on their tray, and if there
+# are any undrawn then the opponent must have exactly 7 on their tray.
+undrawn = unseen - 7
+if undrawn < 0:
+    undrawn = 0
+print "Remaining letters (" + str(undrawn) + '+' + str(unseen - undrawn) + \
+    '=' + str(unseen) + "):", " ".join(sorted(rem))
+
+# -----------------------------------------------------------------------------
 # Read the word list.  Skip words that contain punctuation or upper case
 # letters.
 good_word = re.compile('^[a-z]+$')
@@ -285,6 +319,7 @@ def in_undo_list_vertical(undo, col, top, bottom):
             return True
     return False
 
+# PLAYS is the list of words we could possibly play.
 plays = list()
 
 # See if WORD fits at ROW, COL.  ACROSS is true for a horizontal fit or false
@@ -319,6 +354,7 @@ def fit(word, row, col, across):
     try:
         would_play = ""         # Letters we would play from our tray.
         score = 0
+        if debug: print "a-score", score
         remaining_letters = tray
         adjacent = False
         r = row
@@ -329,7 +365,9 @@ def fit(word, row, col, across):
             if letter == input_board[r][c]:
                 # The letter we need is already on the board in this square.
                 adjacent = True
+                # The letter multiplier will be either 0 or 1.
                 score += letter_value[letter] * letter_multiplier[r][c]
+                if debug: print "b-score", letter, letter_value[letter], letter_multiplier[r][c], score, "at", r, c
             elif input_board[r][c] == ' ':
                 new_rem = remaining_letters.replace(letter, "", 1)
                 if new_rem == remaining_letters:
@@ -342,6 +380,7 @@ def fit(word, row, col, across):
                     played_blank[r, c] = True
                 else:
                     score += letter_value[letter] * letter_multiplier[r][c]
+                    if debug: print "c-score", letter, letter_value[letter], letter_multiplier[r][c], score, "at", r, c
                 would_play += letter
                 remaining_letters = new_rem
                 undo.append((r, c, input_board[r][c]))
@@ -359,19 +398,34 @@ def fit(word, row, col, across):
 
         # The full word is the same as the new word except that it might also
         # have adjacent letters at the beginning or end.  Validate the full
-        # word.
+        # word.  Plus add the values of the adjacent letters, but not for any
+        # that was a blank.
         if across:
             full_word, left, right = adjacent_horizontal(row, col)
             if full_word not in words:
                 if debug: print "adjh", "|" + full_word + "|", row, col, "(invalid)"
                 return
             if debug: print "adjh", "|" + full_word + "|", row, col
+            c = left
+            clast = col + len(word) - 1
+            while c <= right:
+                if c < col or c > clast:
+                    letter = input_board[r][c]
+                    score += letter_value[letter] * letter_multiplier[r][c]
+                c += 1
         else:
             full_word, top, bottom = adjacent_vertical(row, col)
             if full_word not in words:
                 if debug: print "adjh", "|" + full_word + "|", row, col, "(invalid)"
                 return
             if debug: print "adjh", "|" + full_word + "|", row, col
+            r = top
+            rlast = row + len(word) - 1
+            while r <= bottom:
+                if r < row or r > rlast:
+                    letter = input_board[r][c]
+                    score += letter_value[letter] * letter_multiplier[r][c]
+                r += 1
 
         # Check all adjacent words.
         r = row
@@ -424,10 +478,12 @@ def fit(word, row, col, across):
         return
 
     score *= word_mult
-    if debug: print "more_score", more_score
+    if debug: print "d-score", score, word_mult
     score += more_score
+    if debug: print "e-score", score, more_score
     if len(tray) == 7 and len(remaining_letters) == 0:
         score += 35
+        if debug: print "f-score", score
 
     # Add a string to the global list PLAYS describing this possible play.
     # The string is formatted so that we can easily sort by score.
@@ -439,6 +495,28 @@ def fit(word, row, col, across):
     plays.append(s)
     if debug: print "play", s.strip()
 
+# -----------------------------------------------------------------------------
+# Validate all of the words already on the board.
+down = dict()
+across = dict()
+for row in xrange(0, 15):
+    for col in xrange(0, 15):
+        if input_board[row][col] == " ":
+            continue
+        adj = adjacent_vertical(row, col)
+        if adj:
+            other_word, top, bottom = adj
+            if (top, bottom) not in down and other_word not in words:
+                print other_word, "is not a word at", top, bottom, "down"
+            down[top, bottom] = True
+        adj = adjacent_horizontal(row, col)
+        if adj:
+            other_word, left, right = adj
+            if (left, right) not in across and other_word not in words:
+                print other_word, "is not a word at", left, right, "across"
+            across[left, right] = True
+
+# -----------------------------------------------------------------------------
 # Try every word in the word list on every horizontal and vertical position on
 # the board.  Some placements will not be valid (e.g., there's already another
 # word there); fit() will ignore those.  When done, we have the unordered
@@ -454,6 +532,7 @@ for word in words:
             fit(word, j, i, False)
 end = datetime.datetime.now()
 
+# -----------------------------------------------------------------------------
 # Show the possible plays reverse-sorted by score.
 print len(plays), \
     "play" if len(plays) == 1 else "plays", \
