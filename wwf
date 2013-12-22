@@ -506,15 +506,17 @@ for row in xrange(0, 15):
         adj = adjacent_vertical(row, col)
         if adj:
             other_word, top, bottom = adj
-            if (top, bottom) not in down and other_word not in words:
-                print other_word, "is not a word at", top, bottom, "down"
-            down[top, bottom] = True
+            if (top, col, other_word) not in down and \
+                    other_word not in words:
+                print other_word, "is not a word at", top, col, "down"
+            down[top, col, other_word] = True
         adj = adjacent_horizontal(row, col)
         if adj:
             other_word, left, right = adj
-            if (left, right) not in across and other_word not in words:
-                print other_word, "is not a word at", left, right, "across"
-            across[left, right] = True
+            if (row, left, other_word) not in across and \
+                    other_word not in words:
+                print other_word, "is not a word at", row, left, "across"
+            across[row, left, other_word] = True
 
 # -----------------------------------------------------------------------------
 # Try every word in the word list on every horizontal and vertical position on
