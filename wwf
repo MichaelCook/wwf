@@ -1,5 +1,4 @@
-#!/usr/bin/python2
-# -*- python -*-
+#!/usr/bin/python2.7
 
 # This software is distributed under the "Simplified BSD license":
 #
@@ -43,10 +42,9 @@ Options:
   -h --help
 
 """
-from docopt import docopt
-import sys, os, re, datetime
-this = os.path.basename(sys.argv[0]) # this script's name
-args = docopt(__doc__.replace("%this", this))
+import sys, os, re, datetime, docopt
+
+args = docopt.docopt(__doc__.replace("%this", os.path.basename(sys.argv[0])))
 
 debug = args["--debug"]
 debug_word = args["--debug-word"]
@@ -56,7 +54,7 @@ if debug_word:
 word_list = args["--words"]
 if word_list is None:
     # http://blogmybrain.com/words-with-friends-cheat/words.txt
-    word_list = "/home/mcook/site/words.txt"
+    word_list = "/home/michael/site/words.txt"
     #word_list = "/usr/share/dict/words"
 
 letter_value = { "A": 1, "B": 4, "C": 4, "D": 2, "E": 1, "F": 4, "G": 3,
@@ -181,7 +179,7 @@ for line in sys.stdin:
     if not nonwhite_re.match(line):
         continue
     if len(line) != 15:
-        raise Exception("Invalid input line: |" + line + "|")
+        sys.exit("Invalid input line: |" + line + "|")
     for col in xrange(15):
         letter = line[col : col + 1]
         if letter == "." or letter == "+":
@@ -200,10 +198,10 @@ for line in sys.stdin:
             letter_multiplier[row][col] = 0
             letter_count["_"] -= 1
         else:
-            raise Exception("Invalid input square |" + letter + "|")
+            sys.exit("Invalid input square |" + letter + "|")
     row += 1
 if row != 15:
-    raise Exception("Wrong number of input lines: " + str(row) + " != 15")
+    sys.exit("Wrong number of input lines: " + str(row) + " != 15")
 if debug:
     print "== input board =="
     for row in input_board:
@@ -292,7 +290,7 @@ def adjacent_vertical(row, col):
 
 # -----------------------------------------------------------------------------
 # Calculate the on-board score of the word WORD if it were to be played at
-# ROW,COL.  ACROSS is true for a horizontal placement, or False for a vertical
+# ROW,COL.  ACROSS is True for a horizontal placement, or False for a vertical
 # placement.  If we're considering playing any blanks this turn then (r,c) in
 # played_blank will be True.  Returns the score with dl/tl/dw/tw multipliers
 # factored in.
@@ -362,8 +360,13 @@ plays = list()
 def fit(word, row, col, across):
     if debug: print "fit", word, row, col, "across" if across else "down"
 
+    # A list of (row,col) pairs of board locations that will need to be
+    # changed back to empty when we're done trying fits.
     undo = list()
+
+    # Additional words we get from adjacent words.
     other_words = list()
+
     try:
         would_play = ""         # Letters we would play from our tray.
         # actual_play is like would_play, but:
@@ -512,7 +515,7 @@ def fit(word, row, col, across):
     if debug: print "d-score", score, word_mult
     score += more_score
     if debug: print "e-score", score, more_score
-    if len(tray) == 7 and len(remaining_letters) == 0:
+    if len(tray) == 7 and not remaining_letters:
         score += 35
         if debug: print "f-score", score
 
@@ -523,7 +526,7 @@ def fit(word, row, col, across):
          "across" if across else "down")
     if word != full_word:
         s += " as " + full_word
-    if len(remaining_letters) == 0:
+    if not remaining_letters:
         s += " [whole tray]"
     if other_words:
         s += " (" + " ".join(other_words) + ")"
